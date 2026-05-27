@@ -1,0 +1,32 @@
+# Scala / SBT
+target/
+project/target/
+*.class
+*.jar
+*.log
+
+# Chisel / Verilog / FPGA
+fpga/build/
+fpga/*.rpt
+fpga/*.jou
+fpga/*.log
+*.vcd
+*.fst
+*.lxt
+*.vpd
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SPIR-V compiler (Rust/Python)
+spirv/target/
+spirv/__pycache__/
+*.pyc

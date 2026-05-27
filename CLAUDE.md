@@ -1,67 +1,66 @@
-# Gridion Project Guide
+# Gridion — Vulkan Compute GPU with Posit Arithmetic
 
 ## Overview
-GridionはPosit数形式を用いたセル・オートマトン専用アクセラレータのHW設計プロジェクト。
-8×8のPEアレイ、Moore近傍、専用演算器(加算/乗算/比較)方式、Chisel HDLでRTL設計。
+Gridion is a Vulkan Compute-compatible GPU prototype using Posit number format (Unum Type III).
+Designed in Chisel (Scala). Target: FPGA prototyping (Alveo U280 / Kintex-7).
 
 ## Project Structure
 ```
 gridion/
+├── AGENTS.md         # opencode config / first steps
 ├── CLAUDE.md         # This file
 ├── GEMINI.md         # Gemini Code Assist config
-├── AGENTS.md         # opencode config
-├── docs/
-│   └── arch/         # Architecture design documents
-│       ├── 01_background.md
-│       ├── 02_posit_ca_rationale.md
-│       ├── 03_pe_architecture.md
-│       ├── 04_array_topology.md
-│       ├── 05_instruction_set.md
-│       └── 06_evaluation_plan.md
+├── docs/arch/        # Architecture design docs (7 files)
 ├── src/
-│   ├── main/scala/  # Chisel source
-│   │   ├── pe/      # Processing Element
-│   │   ├── array/   # PE Array & Topology
-│   │   ├── posit/   # Posit arithmetic units
-│   │   └── ctrl/    # Global controller
-│   └── test/scala/  # Chisel tests
-├── fpga/            # FPGA synthesis scripts
-├── software/        # Reference soft Posit CA simulator
-└── scripts/         # Build/util scripts
+│   ├── main/scala/gridion/
+│   │   ├── posit/    # Posit arithmetic (decode/encode/add/mul)
+│   │   ├── gpu/
+│   │   │   ├── simt/     # SIMT core: warp scheduler, lane
+│   │   │   ├── memory/   # Memory hierarchy
+│   │   │   └── command/  # Command processor & dispatch
+│   │   └── gpu.scala     # Top-level GPU module
+│   └── test/scala/gridion/
+│       ├── posit/
+│       └── gpu/
+├── spirv/            # SPIR-V to microcode compiler
+└── fpga/             # FPGA synthesis scripts
 ```
 
 ## Design Decisions
-- **Posit format**: Posit(16,1) and Posit(32,2) both under consideration
-- **PE array**: 8×8 (64 PEs) mesh
-- **Neighborhood**: Moore (8-neighbor), fixed with extensible design
-- **Transition function**: Dedicated arithmetic units (add/mul/compare), not LUT-based
-- **Quire**: Per-PE complete precision accumulator for weighted sums
-- **Implementation target**: FPGA (Xilinx Alveo U280 / Kintex-7)
+- **Posit(16,1)** primary target for FPGA fit (64 lanes × ~5.5K LUT ≈ 470K LUT)
+- **SIMT execution** — 64 lanes/warp = Vulkan subgroup size
+- **Dedicated Posit ALUs** — not LUT-based
+- **Per-lane quire** — complete precision for dot-product accumulation
+- **Offline SPIR-V compiler** — shaders → internal microcode on host
+- **1 CU prototype** — scalable to multi-CU
 
 ## Build Commands
 ```bash
-# Compile Chisel
-sbt compile
-
-# Run all tests
-sbt test
-
-# Run specific test
-sbt "testOnly gridion.pe.*"
-
-# Generate Verilog
-sbt "runMain gridion.Generator --target-dir fpga/build"
-
-# FPGA synth (Vivado)
-cd fpga && vivado -mode batch -source synth.tcl
+sbt compile                              # build all Chisel sources
+sbt test                                 # run all tests
+sbt "testOnly gridion.posit.PositAdderTest"  # single test
+sbt "runMain gridion.Generator --target-dir fpga/build"  # Verilog
 ```
 
 ## Code Conventions
-- Scala/Chisel: Use `//` comments only for tricky logic, prefer descriptive names
-- Wire naming: `io_*` for module I/O, `w_*` for wires, `r_*` for registers
-- Posit params: `N` for total width, `ES` for exponent bits
-- Modules: `Posit*` for arithmetic, `PE_*` for PE, `Array_*` for array-level
-- Test style: chiseltest with `expect` assertions
-- Avoid hardcoding array size; use parameter `val nPes = 8`
-- SoftPosit library for software reference (C/Python)
-- Chisel version: 6.x (with chiseltest)
+- Chisel 6.x, Scala 2.13
+- No comments unless logic is non-trivial
+- Posit params: N (total width), ES (exponent bits)
+- Module prefix: `Posit*` arithmetic, `SIMT_*` SIMT, `CU_*` compute unit, `Mem_*` memory
+- Test style: chiseltest `assert` + `expect`
+- Use `Bundle` for grouped IO, `withClockAndReset` for sequential logic
+
+## First Implementation Steps
+1. `src/main/scala/gridion/posit/PositDecode.scala`
+2. `src/main/scala/gridion/posit/PositEncode.scala`
+3. `src/main/scala/gridion/posit/PositMul.scala`
+4. `src/main/scala/gridion/posit/PositAdd.scala`
+5. `src/main/scala/gridion/gpu/simt/SIMTLane.scala`
+6. `src/main/scala/gridion/gpu/simt/WarpScheduler.scala`
+7. `src/main/scala/gridion/gpu/ComputeUnit.scala`
+8. `src/main/scala/gridion/gpu/GridionGPU.scala`
+
+## References
+- docs/arch/01_background.md — Vulkan Compute & Posit background
+- docs/arch/03_compute_unit.md — SIMT core details
+- SoftPosit: https://gitlab.com/cerlane/SoftPosit
