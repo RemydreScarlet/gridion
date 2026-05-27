@@ -15,9 +15,10 @@
 | Posit Encode (×1) | ~150 | ~50 | 0 |
 | Posit Add (×1) | ~800 | ~400 | 0 |
 | Posit Mul (×1) | ~1,200 | ~600 | 0 |
-| Lane total (×1) | ~5,500 | ~3,000 | 0 |
-| CU (64 lanes + scheduler + mem) | ~380,000 | ~210,000 | 32 |
-| Total (1 CU) | ~400,000 | ~230,000 | 32 |
+| Neighbor Router (×1) | ~300 | ~100 | 0 |
+| Lane total (×1) | ~5,800 | ~3,100 | 0 |
+| CU (64 lanes + scheduler + global bus) | ~390,000 | ~215,000 | 32 |
+| Total (1 CU) | ~410,000 | ~235,000 | 32 |
 
 ## Phase 1: Chisel RTL Implementation
 
@@ -41,8 +42,9 @@
 | Module | Test | Target |
 |---|---|---|
 | CU top-level | Single workgroup dispatch | End-to-end correctness |
-| Shared memory | Bank conflict patterns | Correct arbitration |
-| Load/Store | Coalesced/scattered access | Correct addressing |
+| Neighbor mesh | NLOAD all 8 directions, boundary modes | Correct neighbor data |
+| Load/Store (global bus) | Coalesced/scattered access | Correct addressing |
+| Multi-hop routing | Subgroup shuffle across grid | Correct 2D routing |
 
 ### Full GPU (Weeks 9-10)
 | Module | Test | Target |
@@ -79,13 +81,15 @@
 ## Phase 4: Benchmarking
 
 ### Compute Benchmarks
-| Benchmark | Type | Posit advantage |
+| Benchmark | Type | Gridion advantage |
 |---|---|---|
-| Matrix multiply (FPGA) | Dense linear algebra | Quire accuracy |
-| Convolution | Image/signal processing | Quire accuracy |
-| N-body simulation | Particle simulation | Quire accumulation |
-| Mandelbrot | Fractal computation | Tapered precision |
-| Reduction | Parallel reduction | Quire precision |
+| Stencil (2D 5-point / 9-point) | PDE solver | Neighbor mesh = 1 cycle/layer |
+| Cellular automata (GoL, Cyclic) | CA | Neighbor mesh = native |
+| Convolution (3×3, 5×5) | Image processing | Neighbor mesh for kernel window |
+| Matrix multiply | Dense linear algebra | Quire accuracy |
+| Jacobi / Gauss-Seidel | Iterative solvers | Neighbor mesh + quire |
+| Reduction | Parallel reduction | Multi-hop neighbor tree |
+| N-body (nearest neighbor) | Particle simulation | Quire accumulation |
 
 ### Accuracy Comparison
 - Compare: Binary64, Binary32, Posit(32,2), Posit(16,1)
@@ -96,7 +100,8 @@
 | Metric | Definition | Target (1 CU @ 200 MHz) |
 |---|---|---|
 | Peak GFLOPS | Posit ops / s | 25.6 GFLOPS |
-| Memory bandwidth | GB/s (global) | 25.6 GB/s |
+| Neighbor bandwidth | GB/s (mesh) | 25.6 GB/s (local, per CU) |
+| Global bus bandwidth | GB/s (global) | 1.6 GB/s (shared, per CU) |
 | Workgroups/sec | Workgroups / s | Depends on kernel |
 | Energy/op | pJ / posit op | TBD |
 | LUT utilization | Used / total | < 80% |

@@ -1,29 +1,42 @@
 # Memory Subsystem Architecture
 
-## Hierarchy Overview
+## Dual-Network Philosophy
+
+Gridion has two physically separated data movement networks:
 
 ```
-Global Memory (off-chip DDR/HBM)
-         |
-    Memory Controller
-         |
-    Crossbar Switch
-      /    |    \
-    CU 0  CU 1  CU N
-     |      |      |
-  Shared  Shared  Shared
-  Memory  Memory  Memory
-     |      |      |
-   Lanes   Lanes   Lanes
++----------------------------------------------------+
+|                  CU Interior                        |
+|                                                     |
+|  +---------------------------------------------+   |
+|  |        Neighbor Mesh (8×8 grid)              |   |
+|  |  - 1 cycle, dedicated wires per lane          |   |
+|  |  - 8 neighbors, 16 bits each                 |   |
+|  |  - No arbitration, no routing (single-hop)    |   |
+|  +---------------------------------------------+   |
+|                                                     |
+|  +---------------------------------------------+   |
+|  |        Global Bus (shared, AXI4-like)        |   |
+|  |  - 50-100 cycles, 64-bit data bus             |   |
+|  |  - Shared across all lanes in CU              |   |
+|  |  - Memory-mapped: DDR, shared mem, MMIO       |   |
+|  +---------------------------------------------+   |
+|                                                     |
++----------------------------------------------------+
 ```
 
-## Global Memory
+**Key rule**: Neighbor mesh never touches global memory. Global bus never directly connects lanes to each other. These are separate physical networks.
+
+## Global Bus
+
+A single shared bus connecting all lanes in a CU to the memory system.
 
 ### Interface
-- **AXI4**: 64-bit data bus, 32-bit address
+- **AXI4-lite**: 64-bit data bus, 32-bit address
 - **Capacity**: 4 GB (FPGA DDR4 typical)
-- **Latency**: ~50-100 cycles (off-chip)
+- **Latency**: ~50-100 cycles (off-chip DDR)
 - **Coherency**: None (GPU-style, explicit sync)
+- **Arbitration**: Round-robin between warps (not individual lanes)
 
 ### Addressing
 - **Flat address space**: 32-bit byte address
@@ -32,58 +45,52 @@ Global Memory (off-chip DDR/HBM)
 
 ### Global Load/Store
 - **Vector load**: 64 lanes × 16 bits = 128 bytes per warp load
-  - Split into burst transactions
-  - Coalescing: consecutive addresses merged into single burst
-- **Scatter/gather**: Non-consecutive addresses → multiple transactions
+  - Sequentially serialized on 64-bit bus: 16 beats per warp load
+  - Coalescing: consecutive lane addresses merged into fewer beats
+- **Scatter/gather**: Non-consecutive addresses → multiple transactions (slow)
 - **Atomic operations**: quire-accumulate, compare-and-swap
 
 ### Memory Types (Vulkan mapping)
 | Vulkan Type | Gridion Implementation |
 |---|---|
-| Storage buffer | Global memory, linear address |
-| Uniform buffer | Global memory, cached read-only |
+| Storage buffer | Global memory (DDR), accessed via global bus |
+| Uniform buffer | Global memory, cached read-only, via global bus |
 | Push constants | Command processor register space |
 
 ## Shared Memory
 
-### Architecture
-- **16 KB per CU**, partitioned into 16 banks of 8 bytes each
-- **Address interleaving**: consecutive 2-byte words in consecutive banks
-- **Access modes**:
-  - Normal: load/store per-lane
-  - Broadcast: same address from all lanes (1 cycle)
-  - Shuffle: permute data between lanes (1 cycle)
+- **16 KB per CU**, single-ported SRAM
+- Attached to the global bus, NOT to the neighbor mesh
+- **Access cost**: 10-20 cycles (on-CU SRAM + bus arbitration)
+- Contrast with neighbor mesh: 1 cycle, free
 
-### Bank Conflicts
-- N lanes accessing same bank → N-way serialization
-- Conflict-free patterns: all different banks, same address (broadcast)
-- Hardware conflict detection (N-input XOR tree)
-
-### Shared Memory Operations
-| Operation | Latency | Notes |
+### When to use shared memory vs neighbor mesh
+| Pattern | Recommended | Reason |
 |---|---|---|
-| Load (no conflict) | 1 cycle | Read from shared memory |
-| Store (no conflict) | 1 cycle | Write to shared memory |
-| Load (N-way conflict) | N cycles | Serialized access |
-| Atomic add | 3 cycles | Quire-based accumulation |
+| Adjacent data exchange | Neighbor mesh (NLOAD) | 1 cycle |
+| Random access within workgroup | Shared memory | 10-20 cycles |
+| Reduction across all lanes | Multi-hop neighbor tree | ~7 cycles |
+| Scatter to distant lane | Shared memory | Required |
 
-## Private Memory (Registers)
+### Bank Organization
+- 16 banks × 8 bytes each (match global bus width)
+- Not optimized for lane-parallel access (lanes serialize through bus)
 
-### Per-Lane Register File
-- **16 registers × 16 bits** = 32 bytes per lane
-- **Total**: 64 lanes × 32 bytes = 2 KB per CU (register file)
-- **3R1W ports**: 3 reads (two src, one predicate) + 1 write
+## Address Space Layout
 
-### Spill to Shared Memory
-- When register pressure exceeds 16, compiler spills to shared memory
-- Spill area: top portion of shared memory (configurable, default 256 bytes)
+```
+0x0000_0000 - 0x3FFF_FFFF: Global memory (DDR, ~1 GB)
+0x4000_0000 - 0x4000_3FFF: Shared memory (16 KB per CU)
+0x4000_4000 - 0x4000_4FFF: Instruction memory (microcode)
+0xFFFF_0000 - 0xFFFF_FFFF: Memory-mapped control registers
+```
 
 ## Memory Model (Vulkan Compliance)
 
 ### Vulkan Memory Model Features Supported
 - **Non-private**: Storage buffers, uniform buffers
-- **Workgroup scope**: Shared memory
-- **Subgroup scope**: Shuffle operations
+- **Workgroup scope**: Shared memory (via global bus)
+- **Subgroup scope**: Neighbor mesh (fast), shuffle via multi-hop
 - **Queue family scope**: Global memory
 
 ### Memory Ordering
@@ -94,7 +101,7 @@ Global Memory (off-chip DDR/HBM)
 ### Synchronization
 | Instruction | Effect |
 |---|---|
-| BARRIER | Workgroup barrier: all lanes in CU must reach BARRIER |
+| BARRIER | Workgroup barrier: all warps in CU must reach BARRIER |
 | MEMBAR_GLOBAL | Global memory fence |
 | MEMBAR_SHARED | Shared memory fence |
 | MEMBAR_ALL | Full fence |

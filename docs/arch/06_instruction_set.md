@@ -18,16 +18,19 @@ Bit:  15  14  13  12  11  10   9   8   7   6   5   4   3   2   1   0
   - dst, src1: r0-r7 (3-bit)
   - src2: r0-r15 (4-bit) or special
 - **RI (Register-Immediate)**: opcode(6) | dst(3) | src(3) | imm8(4)
-  - imm8: 4-bit immediate (sign-extended or zero-extended depending on opcode)
+  - imm8: 4-bit immediate (sign-extended or zero-extended)
 - **I (Immediate)**: opcode(6) | imm12(6) | pred(4)
   - imm12: general immediate
-  - pred: predicate register select (pred0-pred15)
+  - pred: predicate register select
+
+- **NBR (Neighbor)**: opcode(6) | dst(3) | src(3) | dx(2) | dy(2)
+  - dx, dy: signed 2-bit offset (-1, 0, 1), excluding (0,0)
+  - Encoded: 00=-1, 01=0, 10=1 (dx=dy=01 → reserved = self)
 
 ### Predication
-Every instruction can be predicated (I-type) or unpredicated:
+Every instruction can be predicated:
 - Unpredicated: Always execute
 - Predicated: Execute only if predicate register != 0
-- Reserved predicate value (0xF) means "always execute" in I-type
 
 ## Arithmetic Instructions
 
@@ -78,26 +81,50 @@ Every instruction can be predicated (I-type) or unpredicated:
 | SHL | 011111 | RR | Shift left | 1 |
 | SHR | 100000 | RR | Shift right (logical) | 1 |
 
+## Neighbor Instructions
+
+| Mnemonic | Opcode | Type | Description | Cycles |
+|---|---|---|---|---|
+| NLOAD | 001110 | NBR | dst = neighbor(dx,dy).reg[src] | 1 |
+| NADD | 001111 | NBR | dst = dst + neighbor(dx,dy).reg[src] | 3 |
+
+- `NLOAD`: Read neighbor's register directly via dedicated wire
+- `NADD`: Accumulate neighbor value into local register (neighbor + quire combination)
+- `(dx, dy)` encoding: 00=-1, 01=0, 10=1; (0,0) is reserved
+
+### Multi-Hop Subgroup Operations
+
+Compiler generates NLOAD sequences for subgroup operations:
+```
+// subgroupShuffleDown(src, 2)
+// Lane (x,y) loads from Lane (x, (y+2)%8) via two hops:
+NLOAD tmp, src, 0, 1     // get from south
+NLOAD dst, tmp, 0, 1     // get from south again
+// Total: 2 cycles (much faster than global memory)
+```
+
+Compiler determines optimal multi-hop path given the 8×8 torus topology.
+
 ## Memory Instructions
 
-### Global Memory
+### Global Memory (via Global Bus)
 | Mnemonic | Opcode | Type | Description | Cycles |
 |---|---|---|---|---|
 | GLOAD | 100001 | RR | dst = global[src1 + src2] | variable (50-100) |
 | GSTORE | 100010 | RR | global[src1 + src2] = dst | variable (50-100) |
 
-### Shared Memory
+### Shared Memory (via Global Bus)
 | Mnemonic | Opcode | Type | Description | Cycles |
 |---|---|---|---|---|
-| SLOAD | 100011 | RR | dst = shared[src1 + src2] | 1+ (bank conflict) |
-| SSTORE | 100100 | RR | shared[src1 + src2] = dst | 1+ (bank conflict) |
+| SLOAD | 100011 | RR | dst = shared[src1 + src2] | 10-20 |
+| SSTORE | 100100 | RR | shared[src1 + src2] = dst | 10-20 |
 
 ### Special Memory
 | Mnemonic | Opcode | Type | Description | Cycles |
 |---|---|---|---|---|
 | LDS | 100101 | RI | dst = special_register[imm] | 1 |
 
-Special registers include: `laneID`, `localInvocationID.x/y/z`, `globalInvocationID.x/y/z`, `workgroupID.x/y/z`, `subgroupSize`, `numSubgroups`
+Special registers include: `laneX`, `laneY`, `laneID`, `localInvocationID.x/y/z`, `globalInvocationID.x/y/z`, `workgroupID.x/y/z`, `subgroupSize`, `numSubgroups`
 
 ## Control Flow Instructions
 
@@ -122,19 +149,21 @@ Special registers include: `laneID`, `localInvocationID.x/y/z`, `globalInvocatio
 | MEMBAR | 101110 | I | Memory fence (global/shared/all) | 2 |
 | ATOMIC_ADD | 101111 | RR | global[src1] += src2 | variable |
 
-## Subgroup Instructions
+## Subgroup Instructions (Multi-Hop)
 
-| Mnemonic | Opcode | Type | Description | Cycles |
+| Mnemonic | Opcode | Type | Description | Cycles (max) |
 |---|---|---|---|---|
-| SUB_BRD | 110000 | RI | dst = subgroupBroadcast(src, laneID) | 2 |
-| SUB_SHUFL | 110001 | RI | dst = subgroupShuffle(src, laneID) | 2 |
-| SUB_SHFUP | 110010 | RI | dst = subgroupShuffleUp(src, delta) | 2 |
-| SUB_SHFDN | 110011 | RI | dst = subgroupShuffleDown(src, delta) | 2 |
-| SUB_XOR | 110100 | RI | dst = subgroupShuffleXor(src, xorMask) | 2 |
-| SUB_ADD | 110101 | RI | dst = subgroupReduceAdd(src) | 4 |
-| SUB_PROD | 110110 | RI | dst = subgroupReduceMul(src) | 4 |
-| SUB_MIN | 110111 | RI | dst = subgroupReduceMin(src) | 4 |
-| SUB_MAX | 111000 | RI | dst = subgroupReduceMax(src) | 4 |
+| SUB_BRD | 110000 | RI | dst = subgroupBroadcast(src, laneID) | 14 |
+| SUB_SHUFL | 110001 | RI | dst = subgroupShuffle(src, laneID) | 14 |
+| SUB_SHFUP | 110010 | RI | dst = subgroupShuffleUp(src, delta) | 7 |
+| SUB_SHFDN | 110011 | RI | dst = subgroupShuffleDown(src, delta) | 7 |
+| SUB_XOR | 110100 | RI | dst = subgroupShuffleXor(src, xorMask) | varies |
+| SUB_ADD | 110101 | RI | dst = subgroupReduceAdd(src) | 7 |
+| SUB_PROD | 110110 | RI | dst = subgroupReduceMul(src) | 7 |
+| SUB_MIN | 110111 | RI | dst = subgroupReduceMin(src) | 7 |
+| SUB_MAX | 111000 | RI | dst = subgroupReduceMax(src) | 7 |
+
+These are implemented in microcode as multi-hop NLOAD sequences. Hardware provides a fast-path router per lane; the above latencies assume optimal Manhattan routing.
 
 ## Instruction Encoding Summary
 
@@ -142,6 +171,7 @@ Special registers include: `laneID`, `localInvocationID.x/y/z`, `globalInvocatio
 |---|---|
 | 000001-000101 | Posit arithmetic (FADD, FSUB, FMUL, FMA, FMOV) |
 | 001000-001101 | Posit compare (FCMP_*) |
+| 001110-001111 | **Neighbor (NLOAD, NADD)** |
 | 010001-010111 | Quire & conversion |
 | 011001-100000 | Integer/logic |
 | 100001-100101 | Memory (global, shared, special) |

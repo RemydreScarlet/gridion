@@ -6,6 +6,8 @@ Gridion is a Vulkan Compute-compatible GPU prototype using Posit number format (
 ## Architecture Decisions
 - **Posit(16,1)** — primary target for FPGA fit (64 lanes × ~5.5K LUT ≈ 470K LUT total)
 - **SIMT execution model** — 64 lanes/warp matches Vulkan subgroup size
+- **2D grid topology** — 8×8 lanes, each connected to 8 Moore neighbors via dedicated wires (1 cycle)
+- **Dual-network architecture** — neighbor mesh (fast local) + global bus (slow long-range)
 - **SPIR-V offline compiler** — shaders compiled to internal microcode on host
 - **Dedicated Posit arithmetic units** (add/mul/compare) — not LUT-based
 - **Per-lane quire** — complete precision for dot-product accumulation
@@ -16,7 +18,7 @@ Gridion is a Vulkan Compute-compatible GPU prototype using Posit number format (
 |---|---|
 | `docs/arch/*.md` | Architecture documentation (read before coding) |
 | `src/main/scala/gridion/posit/` | Posit arithmetic modules (decode/encode/add/mul) |
-| `src/main/scala/gridion/gpu/simt/` | SIMT core: warp scheduler, lane datapath |
+| `src/main/scala/gridion/gpu/simt/` | SIMT core: warp scheduler, lane datapath, neighbor router |
 | `src/main/scala/gridion/gpu/memory/` | Memory hierarchy (global/local/private) |
 | `src/main/scala/gridion/gpu/command/` | Command processor & workgroup dispatch |
 | `src/main/scala/gridion/gpu/` | Top-level GPU module |
