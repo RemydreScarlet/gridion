@@ -21,6 +21,14 @@ class SIMTLane(val p: PositParams = PositParams()) extends Module {
 
     val issue = Input(Bool())
     val commit = Input(Bool())
+
+    val memAddr = Output(UInt(32.W))
+    val memData = Output(UInt(p.N.W))
+    val memReq = Output(Bool())
+    val memStore = Output(Bool())
+    val memGlobal = Output(Bool())
+    val memRespData = Input(UInt(p.N.W))
+    val memRespValid = Input(Bool())
   })
 
   val regFile = Reg(Vec(16, UInt(p.N.W)))
@@ -120,16 +128,35 @@ class SIMTLane(val p: PositParams = PositParams()) extends Module {
     Opcode.SHR  -> (src1Val >> src2Val(3, 0)),
   ))
 
-  val aluResult = Mux(Opcode.isPositOp(io.opcode) || Opcode.isCmpOp(io.opcode), positResult,
+  val isMemOp = Opcode.isMemOp(io.opcode)
+
+  val memAddrRaw = src1Val.zext + src2Val.zext
+  io.memAddr := memAddrRaw
+  io.memData := regFile(io.dst)
+  io.memReq := io.issue && isMemOp
+  io.memStore := io.issue && isMemOp && (io.opcode === Opcode.GSTORE || io.opcode === Opcode.SSTORE)
+  io.memGlobal := io.issue && isMemOp && (io.opcode === Opcode.GLOAD || io.opcode === Opcode.GSTORE)
+
+  val memDst = Reg(UInt(4.W))
+  when(io.issue && isMemOp) {
+    memDst := io.dst
+  }
+
+  val aluResult = Mux(isMemOp, 0.U(p.N.W),
+                  Mux(Opcode.isPositOp(io.opcode) || Opcode.isCmpOp(io.opcode), positResult,
                   Mux(Opcode.isNbrOp(io.opcode), nbrVal,
                   Mux(Opcode.isQuireOp(io.opcode) && io.opcode === Opcode.QRND, qEncode.io.out,
                   Mux(Opcode.isQuireOp(io.opcode), 0.U(p.N.W),
-                  Mux(Opcode.isIntOp(io.opcode), intResult, 0.U(p.N.W))))))
+                  Mux(Opcode.isIntOp(io.opcode), intResult, 0.U(p.N.W)))))))
+
+  when(io.memRespValid) {
+    regFile(memDst) := io.memRespData
+  }
 
   when(io.issue && io.commit) {
     regFile(io.dst) := aluResult
     pipeValid := false.B
-  }.elsewhen(io.issue && !io.commit) {
+  }.elsewhen(io.issue && !io.commit && !isMemOp) {
     pipeDst := io.dst
     pipeResult := aluResult
     pipeValid := true.B

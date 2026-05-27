@@ -28,6 +28,8 @@ class WarpScheduler(val numWarps: Int = 4) extends Module {
     val laneIssue = Output(Bool())
     val laneCommit = Output(Bool())
 
+    val memDone = Input(Bool())
+
     val barrierAllReached = Output(Bool())
     val done = Output(Bool())
   })
@@ -161,6 +163,14 @@ class WarpScheduler(val numWarps: Int = 4) extends Module {
 
   when(anyBarrier) {
     barrierCount := PopCount(warpStates.map(_.barrierWaiting))
+  }
+
+  when(isMem && issueReg) {
+    currState.pendingMemOps := currState.pendingMemOps + 1.U
+  }
+
+  when(io.memDone) {
+    warpStates(currWarp).pendingMemOps := 0.U
   }
 
   io.laneOpcode := Mux(issueReg || commitReg, opcodeReg, Opcode.NOP)

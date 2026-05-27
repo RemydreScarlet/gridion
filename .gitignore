@@ -5,6 +5,8 @@ project/target/
 *.jar
 *.log
 
+test_run_dir/
+
 # Chisel / Verilog / FPGA
 fpga/build/
 fpga/*.rpt
