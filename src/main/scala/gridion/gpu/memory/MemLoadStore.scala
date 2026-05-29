@@ -16,6 +16,9 @@ class MemLoadStore extends Module {
   val reqReg = Reg(new LaneMemReq)
   val sharedCycle = RegInit(0.U(1.W))
 
+  val respValid = RegInit(false.B)
+  val respData = RegInit(0.U(16.W))
+
   val sharedAddr = reqReg.addr(13, 3)
   val sharedOffset = reqReg.addr(2, 0)
 
@@ -27,8 +30,12 @@ class MemLoadStore extends Module {
 
   val shared = Module(new MemShared)
 
-  io.laneResp.valid := false.B
-  io.laneResp.bits.data := 0.U
+  io.laneResp.valid := respValid
+  io.laneResp.bits.data := respData
+
+  when(respValid) {
+    respValid := false.B
+  }
 
   shared.io.addr := sharedAddr
   shared.io.wdata := sharedWdata
@@ -54,8 +61,8 @@ class MemLoadStore extends Module {
 
     is(sSharedWait) {
       when(sharedCycle === 1.U) {
-        io.laneResp.valid := true.B
-        io.laneResp.bits.data := sharedRdataSel
+        respValid := true.B
+        respData := sharedRdataSel
         state := sIdle
         sharedCycle := 0.U
       }.otherwise {
@@ -65,9 +72,9 @@ class MemLoadStore extends Module {
 
     is(sGlobalWait) {
       io.global.en := true.B
-      when(io.global.rvalid) {
-        io.laneResp.valid := true.B
-        io.laneResp.bits.data := io.global.rdata(15, 0)
+      when(reqReg.isStore || io.global.rvalid) {
+        respValid := true.B
+        respData := io.global.rdata(15, 0)
         state := sIdle
       }
     }

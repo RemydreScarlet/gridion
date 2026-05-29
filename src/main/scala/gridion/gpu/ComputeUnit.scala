@@ -6,7 +6,7 @@ import gridion.posit._
 import gridion.gpu.simt._
 import gridion.gpu.memory._
 
-class ComputeUnit(val p: PositParams = PositParams(), val numWarps: Int = 4, val microcodeSize: Int = 4096) extends Module {
+class ComputeUnit(val p: PositParams = PositParams(), val numWarps: Int = 4, val microcodeSize: Int = 4096, val numLanes: Int = 64, val addTestHarness: Boolean = false) extends Module {
   val io = IO(new Bundle {
     val start = Input(Bool())
     val kernelAddr = Input(UInt(12.W))
@@ -22,6 +22,16 @@ class ComputeUnit(val p: PositParams = PositParams(), val numWarps: Int = 4, val
     val memWr = Output(Bool())
     val memRespData = Input(UInt(64.W))
     val memRespValid = Input(Bool())
+
+    val test = if (addTestHarness) Some(new Bundle {
+      val lane = new Bundle {
+        val wrEn = Input(Bool())
+        val wrAddr = Input(UInt(4.W))
+        val wrData = Input(UInt(p.N.W))
+        val rdAddr = Input(UInt(4.W))
+        val rdData = Output(UInt(p.N.W))
+      }
+    }) else None
   })
 
   val microcodeMem = SyncReadMem(microcodeSize, UInt(16.W))
@@ -37,8 +47,7 @@ class ComputeUnit(val p: PositParams = PositParams(), val numWarps: Int = 4, val
 
   io.done := scheduler.io.done
 
-  val laneMods = Seq.fill(64)(Module(new SIMTLane(p)))
-  val laneIOs = VecInit(laneMods.map(_.io))
+  val laneMods = Seq.fill(numLanes)(Module(new SIMTLane(p, addTestHarness)))
 
   laneMods.zipWithIndex.foreach { case (l, idx) =>
     val x = idx % 8
@@ -69,30 +78,42 @@ class ComputeUnit(val p: PositParams = PositParams(), val numWarps: Int = 4, val
       val nx = (x + dx + 8) % 8
       val ny = (y + dy + 8) % 8
       val nIdx = ny * 8 + nx
-      l.io.nbrIn(n) := laneMods(nIdx).io.nbrOut
+      if (nIdx < numLanes) {
+        l.io.nbrIn(n) := laneMods(nIdx).io.nbrOut
+      } else {
+        l.io.nbrIn(n) := 0.U
+      }
     }
   }
 
   val loadStore = Module(new MemLoadStore)
 
-  val sIdle :: sMemReq :: sMemWait :: Nil = Enum(3)
+  val sIdle :: sMemReq :: sMemWait :: sNextLane :: Nil = Enum(4)
   val memState = RegInit(sIdle)
-  val memLaneIdx = RegInit(0.U(6.W))
-  val memIsStore = Reg(Bool())
-  val memIsGlobal = Reg(Bool())
-  val totalLanes = 64
+  val memLaneIdx = RegInit(0.U(log2Ceil(numLanes).W))
+  val memIsStore = Wire(Bool())
+  val memIsGlobal = Wire(Bool())
+  val memReqAddr = Wire(UInt(32.W))
+  val memReqData = Wire(UInt(16.W))
+  val totalLanes = numLanes
 
-  val currLane = laneIOs(memLaneIdx)
-  val anyLaneReq = laneMods.map(_.io.memReq).reduce(_ || _)
+  val laneReqVec = VecInit(laneMods.map(_.io.memReq))
+  val anyLaneReq = laneReqVec.reduce(_ || _)
+  val laneReqIdx = PriorityEncoder(laneReqVec.asUInt)
 
+  memIsStore := false.B
+  memIsGlobal := false.B
+  memReqAddr := 0.U
+  memReqData := 0.U
   loadStore.io.laneReq.valid := false.B
   loadStore.io.laneReq.bits.isGlobal := memIsGlobal
   loadStore.io.laneReq.bits.isShared := !memIsGlobal
   loadStore.io.laneReq.bits.isStore := memIsStore
-  loadStore.io.laneReq.bits.addr := currLane.memAddr
-  loadStore.io.laneReq.bits.data := currLane.memData
+  loadStore.io.laneReq.bits.addr := memReqAddr
+  loadStore.io.laneReq.bits.data := memReqData
 
   val memDone = Wire(Bool())
+  memDone := false.B
   scheduler.io.memDone := memDone
 
   laneMods.foreach { l =>
@@ -102,33 +123,50 @@ class ComputeUnit(val p: PositParams = PositParams(), val numWarps: Int = 4, val
 
   switch(memState) {
     is(sIdle) {
-      memLaneIdx := 0.U
+      memLaneIdx := laneReqIdx
       when(anyLaneReq) {
         memState := sMemReq
       }
     }
 
     is(sMemReq) {
-      loadStore.io.laneReq.valid := true.B
-      memIsStore := currLane.memStore
-      memIsGlobal := currLane.memGlobal
-      memState := sMemWait
+      for (i <- 0 until totalLanes) {
+        when(memLaneIdx === i.U) {
+          when(laneMods(i).io.memReq) {
+            memIsStore := laneMods(i).io.memStore
+            memIsGlobal := laneMods(i).io.memGlobal
+            memReqAddr := laneMods(i).io.memAddr
+            memReqData := laneMods(i).io.memData
+            loadStore.io.laneReq.valid := true.B
+            memState := sMemWait
+          }.otherwise {
+            memState := sNextLane
+          }
+        }
+      }
     }
 
     is(sMemWait) {
-      val laneDone = memIsStore || loadStore.io.laneResp.valid
-      when(laneDone) {
-        when(!memIsStore) {
-          currLane.memRespData := loadStore.io.laneResp.bits.data
-          currLane.memRespValid := true.B
+      when(loadStore.io.laneResp.valid) {
+        for (i <- 0 until totalLanes) {
+          when(memLaneIdx === i.U) {
+            laneMods(i).io.memRespValid := true.B
+            when(!memIsStore) {
+              laneMods(i).io.memRespData := loadStore.io.laneResp.bits.data
+            }
+          }
         }
-        when(memLaneIdx === (totalLanes - 1).U) {
-          memState := sIdle
-          memDone := true.B
-        }.otherwise {
-          memLaneIdx := memLaneIdx + 1.U
-          memState := sMemReq
-        }
+        memState := sNextLane
+      }
+    }
+
+    is(sNextLane) {
+      when(memLaneIdx === (totalLanes - 1).U) {
+        memState := sIdle
+        memDone := true.B
+      }.otherwise {
+        memLaneIdx := memLaneIdx + 1.U
+        memState := sMemReq
       }
     }
   }
@@ -140,4 +178,21 @@ class ComputeUnit(val p: PositParams = PositParams(), val numWarps: Int = 4, val
   loadStore.io.global.rdata := io.memRespData
   loadStore.io.global.rvalid := io.memRespValid
   loadStore.io.global.ready := true.B
+
+  if (addTestHarness) {
+    val th = io.test.get
+    val lane0 = laneMods(0)
+    lane0.io.test.get.wrEn := th.lane.wrEn
+    lane0.io.test.get.wrAddr := th.lane.wrAddr
+    lane0.io.test.get.wrData := th.lane.wrData
+    lane0.io.test.get.rdAddr := th.lane.rdAddr
+    th.lane.rdData := lane0.io.test.get.rdData
+
+    for (i <- 1 until numLanes) {
+      laneMods(i).io.test.get.wrEn := false.B
+      laneMods(i).io.test.get.wrAddr := 0.U
+      laneMods(i).io.test.get.wrData := 0.U
+      laneMods(i).io.test.get.rdAddr := 0.U
+    }
+  }
 }

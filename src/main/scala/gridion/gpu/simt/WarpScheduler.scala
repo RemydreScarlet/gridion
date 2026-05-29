@@ -89,6 +89,8 @@ class WarpScheduler(val numWarps: Int = 4) extends Module {
 
   val opcodeReg = Reg(UInt(6.W))
   val dstReg = Reg(UInt(4.W))
+  val src1Reg = Reg(UInt(4.W))
+  val src2Reg = Reg(UInt(4.W))
   val latReg = Reg(UInt(4.W))
   val issueReg = Reg(Bool())
   val commitReg = Reg(Bool())
@@ -124,6 +126,8 @@ class WarpScheduler(val numWarps: Int = 4) extends Module {
 
           opcodeReg := opcode
           dstReg := dst
+          src1Reg := src1
+          src2Reg := src2
           latReg := 1.U
           issueReg := true.B
           commitReg := true.B
@@ -135,6 +139,8 @@ class WarpScheduler(val numWarps: Int = 4) extends Module {
         }.otherwise {
           opcodeReg := opcode
           dstReg := dst
+          src1Reg := src1
+          src2Reg := src2
           latReg := lat
           issueReg := true.B
           when(lat <= 1.U) {
@@ -174,10 +180,10 @@ class WarpScheduler(val numWarps: Int = 4) extends Module {
 
   io.laneOpcode := Mux(issueReg || commitReg, opcodeReg, Opcode.NOP)
   io.laneDst := Mux(issueReg, dstReg, 0.U)
-  io.laneSrc1 := inst(6, 4)
-  io.laneSrc2 := inst(3, 0)
-  io.laneDx := inst(3, 2)
-  io.laneDy := inst(1, 0)
+  io.laneSrc1 := Mux(issueReg || commitReg, src1Reg, 0.U)
+  io.laneSrc2 := Mux(issueReg || commitReg, src2Reg, 0.U)
+  io.laneDx := Mux(issueReg || commitReg, src2Reg(3, 2), 0.U)
+  io.laneDy := Mux(issueReg || commitReg, src2Reg(1, 0), 0.U)
   io.laneIssue := issueReg
   io.laneCommit := commitReg
 

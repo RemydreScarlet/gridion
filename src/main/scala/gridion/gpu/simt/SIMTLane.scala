@@ -140,17 +140,33 @@ class SIMTLane(val p: PositParams = PositParams(), val addTestHarness: Boolean =
 
   val isMemOp = Opcode.isMemOp(io.opcode)
 
-  val memAddrRaw = src1Val.zext + src2Val.zext
-  io.memAddr := memAddrRaw.asUInt
-  io.memData := regFile(io.dst)
-  io.memReq := io.issue && isMemOp
-  io.memStore := io.issue && isMemOp && (io.opcode === Opcode.GSTORE || io.opcode === Opcode.SSTORE)
-  io.memGlobal := io.issue && isMemOp && (io.opcode === Opcode.GLOAD || io.opcode === Opcode.GSTORE)
+  val memPending = RegInit(false.B)
+  val memStoreReg = Reg(Bool())
+  val memGlobalReg = Reg(Bool())
+  val memAddrReg = Reg(UInt(32.W))
+  val memDataReg = Reg(UInt(16.W))
+  val memDstReg = Reg(UInt(4.W))
 
-  val memDst = Reg(UInt(4.W))
+  val memAddrRaw = src1Val.zext + src2Val.zext
+  io.memAddr := Mux(io.issue && isMemOp, memAddrRaw.asUInt, memAddrReg)
+  io.memData := Mux(io.issue && isMemOp, regFile(io.dst), memDataReg)
+
   when(io.issue && isMemOp) {
-    memDst := io.dst
+    memPending := true.B
+    memStoreReg := io.opcode === Opcode.GSTORE || io.opcode === Opcode.SSTORE
+    memGlobalReg := io.opcode === Opcode.GLOAD || io.opcode === Opcode.GSTORE
+    memAddrReg := io.memAddr
+    memDataReg := regFile(io.dst)
+    memDstReg := io.dst
   }
+
+  when(io.memRespValid) {
+    memPending := false.B
+  }
+
+  io.memReq := (io.issue && isMemOp) || memPending
+  io.memStore := Mux(io.issue && isMemOp, io.opcode === Opcode.GSTORE || io.opcode === Opcode.SSTORE, memStoreReg)
+  io.memGlobal := Mux(io.issue && isMemOp, io.opcode === Opcode.GLOAD || io.opcode === Opcode.GSTORE, memGlobalReg)
 
   val aluResult = Mux(isMemOp, 0.U(p.N.W),
                   Mux(Opcode.isPositOp(io.opcode) || Opcode.isCmpOp(io.opcode), positResult,
@@ -160,7 +176,9 @@ class SIMTLane(val p: PositParams = PositParams(), val addTestHarness: Boolean =
                   Mux(Opcode.isIntOp(io.opcode), intResult, 0.U(p.N.W)))))))
 
   when(io.memRespValid) {
-    regFile(memDst) := io.memRespData
+    when(!memStoreReg) {
+      regFile(memDstReg) := io.memRespData
+    }
   }
 
   when(io.issue && io.commit) {

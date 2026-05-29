@@ -21,8 +21,9 @@ class MemLoadStoreTest extends AnyFlatSpec with ChiselScalatestTester {
       c.clock.step(1)
       c.io.laneReq.valid.poke(false.B)
       c.clock.step(1)
+      c.clock.step(1)
 
-      assert(c.io.laneResp.valid.peekBoolean(), "store should complete after 2 cycles")
+      assert(c.io.laneResp.valid.peekBoolean(), "store should complete")
       c.clock.step(1)
     }
   }
@@ -40,6 +41,7 @@ class MemLoadStoreTest extends AnyFlatSpec with ChiselScalatestTester {
       c.clock.step(1)
       c.io.laneReq.valid.poke(false.B)
       c.clock.step(1)
+      c.clock.step(1)
 
       assert(c.io.laneResp.valid.peekBoolean(), "store should complete")
       c.clock.step(1)
@@ -51,6 +53,7 @@ class MemLoadStoreTest extends AnyFlatSpec with ChiselScalatestTester {
       c.io.laneReq.bits.isShared.poke(true.B)
       c.clock.step(1)
       c.io.laneReq.valid.poke(false.B)
+      c.clock.step(1)
       c.clock.step(1)
 
       assert(c.io.laneResp.valid.peekBoolean(), "shared load should complete")
@@ -97,7 +100,9 @@ class MemLoadStoreTest extends AnyFlatSpec with ChiselScalatestTester {
       c.io.global.rvalid.poke(true.B)
       c.io.global.rdata.poke(0x7FFF.U)
 
-      assert(c.io.laneResp.valid.peekBoolean(), "global load resp should be valid before step")
+      c.clock.step(1)
+
+      assert(c.io.laneResp.valid.peekBoolean(), "global load resp should be valid after step")
       val data = c.io.laneResp.bits.data.peekInt()
       assert(data == 0x7FFF, s"global load data: 0x${data.toString(16)} != 0x7FFF")
 
