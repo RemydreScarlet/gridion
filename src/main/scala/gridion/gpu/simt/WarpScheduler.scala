@@ -75,18 +75,17 @@ class WarpScheduler(val numWarps: Int = 4) extends Module {
 
   io.barrierAllReached := barrierCount >= numWarps.U
 
-  val nextWarp = Wire(UInt(log2Ceil(numWarps).W))
-  val found = Wire(Bool())
-  found := false.B
-  nextWarp := currWarp
-
-  for (i <- 0 until numWarps) {
-    val w = (currWarp + i.U + 1.U) % numWarps.U
-    when(!found && warpReady(w)) {
-      found := true.B
-      nextWarp := w
-    }
-  }
+  val readyBits = warpReady.asUInt
+  val numWarpsU = numWarps.U
+  val wrapMask = (1.U << numWarpsU) - 1.U
+  val higherMask = wrapMask & ~((1.U << (currWarp + 1.U)) - 1.U)
+  val higherReady = readyBits & higherMask
+  val lowerReady = readyBits & ((1.U << currWarp) - 1.U)
+  val anyReady = higherReady.orR
+  val searchMask = Mux(anyReady, higherMask, wrapMask)
+  val searchVec = readyBits & searchMask
+  val found = searchVec.orR
+  val nextWarp = Mux(found, PriorityEncoder(searchVec), currWarp)
 
   val opcodeReg = Reg(UInt(6.W))
   val dstReg = Reg(UInt(4.W))

@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import gridion.posit._
 
-class SIMTLane(val p: PositParams = PositParams()) extends Module {
+class SIMTLane(val p: PositParams = PositParams(), val addTestHarness: Boolean = false) extends Module {
   val io = IO(new Bundle {
     val opcode = Input(UInt(6.W))
     val dst = Input(UInt(4.W))
@@ -29,6 +29,14 @@ class SIMTLane(val p: PositParams = PositParams()) extends Module {
     val memGlobal = Output(Bool())
     val memRespData = Input(UInt(p.N.W))
     val memRespValid = Input(Bool())
+
+    val test = if (addTestHarness) Some(new Bundle {
+      val wrEn = Input(Bool())
+      val wrAddr = Input(UInt(4.W))
+      val wrData = Input(UInt(p.N.W))
+      val rdAddr = Input(UInt(4.W))
+      val rdData = Output(UInt(p.N.W))
+    }) else None
   })
 
   val regFile = Reg(Vec(16, UInt(p.N.W)))
@@ -67,6 +75,8 @@ class SIMTLane(val p: PositParams = PositParams()) extends Module {
   adder.io.b := Mux(io.opcode === Opcode.FSUB, internalSubB, internalB)
   mul.io.a := internalA
   mul.io.b := internalB
+  cmp.io.a := internalA
+  cmp.io.b := internalB
 
   val cmpEq = cmp.io.eq
   val cmpNe = cmp.io.ne
@@ -131,7 +141,7 @@ class SIMTLane(val p: PositParams = PositParams()) extends Module {
   val isMemOp = Opcode.isMemOp(io.opcode)
 
   val memAddrRaw = src1Val.zext + src2Val.zext
-  io.memAddr := memAddrRaw
+  io.memAddr := memAddrRaw.asUInt
   io.memData := regFile(io.dst)
   io.memReq := io.issue && isMemOp
   io.memStore := io.issue && isMemOp && (io.opcode === Opcode.GSTORE || io.opcode === Opcode.SSTORE)
@@ -165,5 +175,13 @@ class SIMTLane(val p: PositParams = PositParams()) extends Module {
   when(io.commit && !io.issue && pipeValid) {
     regFile(pipeDst) := pipeResult
     pipeValid := false.B
+  }
+
+  if (addTestHarness) {
+    val th = io.test.get
+    when(th.wrEn) {
+      regFile(th.wrAddr) := th.wrData
+    }
+    th.rdData := regFile(th.rdAddr)
   }
 }
