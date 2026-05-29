@@ -28,11 +28,14 @@ class Quire(val p: PositParams = PositParams()) extends Module {
   val shiftPos = shiftAmt >= 0.S
   val absShift = Mux(shiftPos, shiftAmt.asUInt, (-shiftAmt).asUInt)
 
+  val prod128 = Wire(SInt(128.W))
+  prod128 := productSigned.asSInt
+
   val shifted = Wire(SInt(128.W))
   when(shiftPos) {
-    shifted := (productSigned << absShift(6, 0))(127, 0).asSInt
+    shifted := (prod128 << absShift(6, 0))(127, 0).asSInt
   }.otherwise {
-    shifted := (productSigned >> absShift(6, 0))(127, 0).asSInt
+    shifted := (prod128 >> absShift(6, 0))(127, 0).asSInt
   }
 
   when(io.clr) {
